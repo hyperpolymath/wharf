@@ -461,3 +461,146 @@ pre-release version:
     @just rsr-report
     @echo ""
     @echo "Ready for release {{version}}? Run: git tag -s v{{version}}"
+
+# ============================================================================
+# 14. CONTAINER MANAGEMENT
+# ============================================================================
+
+# Build all container images
+build-containers: build-php-container build-nginx-container build-agent-container
+    @echo ">>> All containers built!"
+
+# Build PHP container (Wolfi-based)
+build-php-container:
+    @echo ">>> Building yacht-php container..."
+    podman build -t yacht-php:latest -f infra/containers/php.Dockerfile .
+
+# Build Nginx container (Wolfi-based)
+build-nginx-container:
+    @echo ">>> Building yacht-nginx container..."
+    podman build -t yacht-nginx:latest -f infra/containers/nginx.Dockerfile .
+
+# Build Yacht Agent container
+build-agent-container: build-rust
+    @echo ">>> Building yacht-agent container..."
+    @echo "Note: Agent container build requires compiled binary"
+
+# Deploy pod to yacht using Podman
+deploy-pod target:
+    @echo ">>> Deploying Yacht pod to {{target}}..."
+    ssh {{target}} "podman kube play --replace /opt/wharf/yacht.yaml"
+
+# Show container logs
+container-logs target container:
+    @echo ">>> Fetching logs from {{target}}/{{container}}..."
+    ssh {{target}} "podman logs yacht-{{container}}"
+
+# Restart yacht containers
+restart-yacht target:
+    @echo ">>> Restarting Yacht on {{target}}..."
+    ssh {{target}} "podman pod restart yacht"
+
+# ============================================================================
+# 15. DATABASE OPERATIONS
+# ============================================================================
+
+# Configure database policy
+db-policy policy_file:
+    @echo ">>> Loading database policy from {{policy_file}}..."
+    ./target/release/wharf db policy {{policy_file}}
+
+# Export database with pruning (for migration)
+db-export connection output:
+    @echo ">>> Exporting database with pruning..."
+    ./target/release/wharf db export "{{connection}}" -o {{output}} --prune
+
+# Show database proxy statistics
+db-stats target:
+    @echo ">>> Database proxy stats for {{target}}..."
+    curl -s http://{{target}}:9001/stats | jq .
+
+# ============================================================================
+# 16. eBPF FIREWALL
+# ============================================================================
+
+# Build eBPF firewall (requires bpf-linker)
+build-ebpf:
+    @echo ">>> Building eBPF firewall..."
+    @echo "Note: Requires LLVM and bpf-linker"
+    cd crates/wharf-ebpf && cargo build --release --target bpfel-unknown-none
+
+# Load eBPF firewall (on yacht)
+load-shield target interface="eth0":
+    @echo ">>> Loading Wharf Shield on {{target}}:{{interface}}..."
+    ssh {{target}} "yacht-agent --xdp-interface {{interface}}"
+
+# ============================================================================
+# 17. FLEET MANAGEMENT
+# ============================================================================
+
+# List all yachts in fleet
+fleet-list:
+    @echo ">>> Fleet inventory..."
+    ./target/release/wharf fleet list --long
+
+# Add yacht to fleet
+fleet-add name ip domain:
+    @echo ">>> Adding yacht {{name}} to fleet..."
+    ./target/release/wharf fleet add {{name}} --ip {{ip}} --domain {{domain}}
+
+# Remove yacht from fleet
+fleet-remove name:
+    @echo ">>> Removing yacht {{name}} from fleet..."
+    ./target/release/wharf fleet remove {{name}} --force
+
+# Fleet health check
+fleet-health:
+    @echo ">>> Checking fleet health..."
+    @./target/release/wharf fleet status all || cargo run --bin wharf -- fleet status all
+
+# ============================================================================
+# 18. STATE MANAGEMENT
+# ============================================================================
+
+# Create a snapshot of current state
+snapshot name="":
+    @echo ">>> Creating state snapshot..."
+    ./target/release/wharf state freeze --name "{{name}}" --with-db
+
+# Restore a snapshot
+restore id:
+    @echo ">>> Restoring snapshot {{id}}..."
+    ./target/release/wharf state thaw {{id}}
+
+# Compare local vs remote state
+diff-state target:
+    @echo ">>> Comparing local state with {{target}}..."
+    ./target/release/wharf state diff {{target}}
+
+# List all snapshots
+list-snapshots:
+    @echo ">>> Available snapshots..."
+    ./target/release/wharf state list --long
+
+# ============================================================================
+# 19. EMERGENCY OPERATIONS
+# ============================================================================
+
+# Emergency mooring (bypass 2FA)
+panic target:
+    @echo "!!! INITIATING EMERGENCY MOORING !!!"
+    @echo ">>> This bypasses standard security checks"
+    @echo ">>> Use only in genuine emergencies"
+    ./target/release/wharf moor {{target}} --emergency --force
+
+# Kill switch - immediately disable yacht
+kill-yacht target:
+    @echo "!!! EMERGENCY KILL SWITCH !!!"
+    @echo ">>> Stopping all services on {{target}}..."
+    ssh {{target}} "podman pod stop yacht && podman pod rm yacht"
+
+# Restore yacht from backup
+restore-yacht target snapshot:
+    @echo ">>> Restoring {{target}} from {{snapshot}}..."
+    just restore {{snapshot}}
+    just moor {{target}} --push --force

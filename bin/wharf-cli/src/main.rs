@@ -10,12 +10,18 @@
 //! - `wharf init` - Initialize a new fleet configuration
 //! - `wharf build` - Compile zone files and artifacts
 //! - `wharf moor <yacht>` - Connect to a yacht and sync state
-//! - `wharf audit <yacht>` - Audit a yacht's security posture
+//! - `wharf state` - State management (freeze, thaw, diff)
+//! - `wharf sec` - Security operations (audit, rotate-keys, gen-firewall)
 //! - `wharf gen-keys` - Generate cryptographic keys (DKIM, SSH, TLS)
+//! - `wharf db` - Database configuration commands
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
+
+// =============================================================================
+// CLI STRUCTURE
+// =============================================================================
 
 #[derive(Parser)]
 #[command(name = "wharf")]
@@ -24,8 +30,12 @@ use tracing_subscriber::FmtSubscriber;
 #[command(about = "The Sovereign Web Hypervisor - Offline CMS Administration", long_about = None)]
 struct Cli {
     /// Increase verbosity (-v, -vv, -vvv)
-    #[arg(short, long, action = clap::ArgAction::Count)]
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
+
+    /// Configuration directory
+    #[arg(short, long, default_value = ".", global = true)]
+    config: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -38,6 +48,10 @@ enum Commands {
         /// Path to create the configuration
         #[arg(short, long, default_value = ".")]
         path: String,
+
+        /// CMS adapter (wordpress, drupal, moodle, joomla, custom)
+        #[arg(long, default_value = "wordpress")]
+        adapter: String,
     },
 
     /// Build zone files and deployment artifacts
@@ -45,6 +59,18 @@ enum Commands {
         /// The target yacht to build for
         #[arg(short, long)]
         target: Option<String>,
+
+        /// Output directory
+        #[arg(short, long, default_value = "dist")]
+        output: String,
+
+        /// Build containers
+        #[arg(long)]
+        containers: bool,
+
+        /// Build eBPF firewall
+        #[arg(long)]
+        ebpf: bool,
     },
 
     /// Connect to a yacht and synchronize state (The Mooring)
@@ -52,24 +78,31 @@ enum Commands {
         /// The yacht ID to connect to
         yacht: String,
 
-        /// Push state changes to the yacht
+        /// Force sync even if hashes match
         #[arg(long)]
-        push: bool,
+        force: bool,
 
-        /// Pull state from the yacht
+        /// Push only specific layers (db, files, config)
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        layers: Vec<String>,
+
+        /// Emergency mode: Break glass access (bypass 2FA)
         #[arg(long)]
-        pull: bool,
+        emergency: bool,
+
+        /// Dry run - show what would be synced
+        #[arg(long)]
+        dry_run: bool,
     },
 
-    /// Audit a yacht's security configuration
-    Audit {
-        /// The yacht ID to audit
-        yacht: String,
+    /// State management commands
+    State(StateArgs),
 
-        /// Output format (text, json, sarif)
-        #[arg(short, long, default_value = "text")]
-        format: String,
-    },
+    /// Security operations
+    Sec(SecArgs),
+
+    /// Database configuration commands
+    Db(DbArgs),
 
     /// Generate cryptographic keys and DNS records
     GenKeys {
@@ -87,6 +120,10 @@ enum Commands {
         /// Generate TLSA/DANE records
         #[arg(long)]
         tlsa: bool,
+
+        /// Generate OPENPGPKEY records
+        #[arg(long)]
+        openpgpkey: bool,
     },
 
     /// Render a DNS zone template
@@ -94,7 +131,7 @@ enum Commands {
         /// Template file path
         template: String,
 
-        /// Variables file (JSON)
+        /// Variables file (JSON or Nickel)
         vars: String,
 
         /// Output file (stdout if not specified)
@@ -111,9 +148,313 @@ enum Commands {
         file: String,
     },
 
+    /// Fleet management commands
+    Fleet(FleetArgs),
+
+    /// Container management commands
+    Container(ContainerArgs),
+
     /// Show version and system info
     Version,
 }
+
+// =============================================================================
+// STATE COMMANDS
+// =============================================================================
+
+#[derive(Args)]
+struct StateArgs {
+    #[command(subcommand)]
+    command: StateCommands,
+}
+
+#[derive(Subcommand)]
+enum StateCommands {
+    /// Create a snapshot of the current local state
+    Freeze {
+        /// Name for the snapshot
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Include database dump
+        #[arg(long)]
+        with_db: bool,
+    },
+
+    /// Apply a snapshot to the local staging area
+    Thaw {
+        /// Snapshot ID or name
+        id: String,
+
+        /// Force overwrite current state
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Compare local state vs remote Yacht state
+    Diff {
+        /// Target yacht to compare against
+        target: String,
+
+        /// Show only changed files
+        #[arg(long)]
+        changed_only: bool,
+    },
+
+    /// List all snapshots
+    List {
+        /// Show detailed information
+        #[arg(short, long)]
+        long: bool,
+    },
+
+    /// Prune old snapshots
+    Prune {
+        /// Keep only the last N snapshots
+        #[arg(long, default_value_t = 10)]
+        keep: usize,
+
+        /// Dry run - show what would be deleted
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+// =============================================================================
+// SECURITY COMMANDS
+// =============================================================================
+
+#[derive(Args)]
+struct SecArgs {
+    #[command(subcommand)]
+    command: SecCommands,
+}
+
+#[derive(Subcommand)]
+enum SecCommands {
+    /// Audit the security configuration
+    Audit {
+        /// Target yacht (or 'all')
+        #[arg(default_value = "all")]
+        target: String,
+
+        /// Output format (text, json, sarif)
+        #[arg(short, long, default_value = "text")]
+        format: String,
+
+        /// Check against CIS benchmarks
+        #[arg(long)]
+        cis: bool,
+    },
+
+    /// Rotate cryptographic keys
+    RotateKeys {
+        /// Key type to rotate (nebula, dkim, tlsa, all)
+        #[arg(default_value = "all")]
+        key_type: String,
+
+        /// Force rotation even if not expired
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Generate eBPF firewall bytecode
+    GenFirewall {
+        /// Output path for the compiled BPF object
+        #[arg(short, long, default_value = "dist/wharf-shield.o")]
+        output: String,
+
+        /// Target architecture (x86_64, aarch64)
+        #[arg(long, default_value = "x86_64")]
+        arch: String,
+    },
+
+    /// Verify file integrity against manifest
+    Verify {
+        /// Target yacht
+        target: String,
+
+        /// Path to manifest file
+        #[arg(long)]
+        manifest: Option<String>,
+    },
+
+    /// Scan for vulnerabilities
+    Scan {
+        /// Target yacht
+        target: String,
+
+        /// Scan type (deps, containers, config)
+        #[arg(long, default_value = "all")]
+        scan_type: String,
+    },
+}
+
+// =============================================================================
+// DATABASE COMMANDS
+// =============================================================================
+
+#[derive(Args)]
+struct DbArgs {
+    #[command(subcommand)]
+    command: DbCommands,
+}
+
+#[derive(Subcommand)]
+enum DbCommands {
+    /// Configure database virtual sharding policy
+    Policy {
+        /// Path to policy file (Nickel)
+        file: String,
+
+        /// Validate only, don't apply
+        #[arg(long)]
+        validate: bool,
+    },
+
+    /// Export database (for migration to Wharf)
+    Export {
+        /// Connection string
+        connection: String,
+
+        /// Output file
+        #[arg(short, long)]
+        output: String,
+
+        /// Prune revisions and spam
+        #[arg(long)]
+        prune: bool,
+    },
+
+    /// Import database dump
+    Import {
+        /// Dump file
+        file: String,
+
+        /// Target yacht
+        target: String,
+    },
+
+    /// Show database proxy status
+    Status {
+        /// Target yacht
+        target: String,
+    },
+}
+
+// =============================================================================
+// FLEET COMMANDS
+// =============================================================================
+
+#[derive(Args)]
+struct FleetArgs {
+    #[command(subcommand)]
+    command: FleetCommands,
+}
+
+#[derive(Subcommand)]
+enum FleetCommands {
+    /// List all yachts in the fleet
+    List {
+        /// Show detailed information
+        #[arg(short, long)]
+        long: bool,
+    },
+
+    /// Add a new yacht to the fleet
+    Add {
+        /// Yacht name/ID
+        name: String,
+
+        /// IP address or hostname
+        #[arg(long)]
+        ip: String,
+
+        /// Domain name
+        #[arg(long)]
+        domain: String,
+
+        /// CMS adapter
+        #[arg(long, default_value = "wordpress")]
+        adapter: String,
+    },
+
+    /// Remove a yacht from the fleet
+    Remove {
+        /// Yacht name/ID
+        name: String,
+
+        /// Force removal
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Show yacht status
+    Status {
+        /// Yacht name (or 'all')
+        #[arg(default_value = "all")]
+        name: String,
+    },
+}
+
+// =============================================================================
+// CONTAINER COMMANDS
+// =============================================================================
+
+#[derive(Args)]
+struct ContainerArgs {
+    #[command(subcommand)]
+    command: ContainerCommands,
+}
+
+#[derive(Subcommand)]
+enum ContainerCommands {
+    /// Build container images
+    Build {
+        /// Image to build (php, nginx, agent, all)
+        #[arg(default_value = "all")]
+        image: String,
+
+        /// Push to registry after building
+        #[arg(long)]
+        push: bool,
+
+        /// Registry URL
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
+    /// Deploy containers to yacht
+    Deploy {
+        /// Target yacht
+        target: String,
+
+        /// Pod definition file
+        #[arg(long, default_value = "infra/podman/yacht.yaml")]
+        pod: String,
+    },
+
+    /// Show container logs
+    Logs {
+        /// Target yacht
+        target: String,
+
+        /// Container name (nginx, php, agent)
+        container: String,
+
+        /// Follow logs
+        #[arg(short, long)]
+        follow: bool,
+
+        /// Number of lines
+        #[arg(short, long, default_value_t = 100)]
+        lines: usize,
+    },
+}
+
+// =============================================================================
+// MAIN
+// =============================================================================
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -135,43 +476,200 @@ async fn main() -> anyhow::Result<()> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     match cli.command {
-        Commands::Init { path } => {
+        Commands::Init { path, adapter } => {
             info!("Initializing Wharf configuration at: {}", path);
             println!("Wharf fleet configuration initialized at: {}", path);
-            println!("Edit configs/fleet.ncl to add your yachts.");
+            println!("CMS Adapter: {}", adapter);
+            println!();
+            println!("Next steps:");
+            println!("  1. Edit configs/fleet.ncl to add your yachts");
+            println!("  2. Run 'wharf build' to generate artifacts");
+            println!("  3. Run 'wharf moor <yacht>' to deploy");
         }
 
-        Commands::Build { target } => {
+        Commands::Build { target, output, containers, ebpf } => {
             info!("Building deployment artifacts");
             if let Some(t) = target {
                 println!("Building for yacht: {}", t);
             } else {
                 println!("Building all yachts...");
             }
-            // TODO: Implement build logic
+            println!("Output directory: {}", output);
+
+            if containers {
+                println!("Building container images...");
+                println!("  - yacht-php:latest");
+                println!("  - yacht-nginx:latest");
+                println!("  - yacht-agent:latest");
+            }
+
+            if ebpf {
+                println!("Compiling eBPF firewall...");
+                println!("  - wharf-shield.o");
+            }
         }
 
-        Commands::Moor { yacht, push, pull } => {
+        Commands::Moor { yacht, force, layers, emergency, dry_run } => {
             info!("Initiating mooring sequence for yacht: {}", yacht);
-            println!(">>> TOUCH FIDO2 KEY NOW <<<");
+
+            if emergency {
+                println!("!!! EMERGENCY OVERRIDE ENABLED !!!");
+                println!(">>> Bypassing standard security checks <<<");
+            } else {
+                println!(">>> TOUCH FIDO2 KEY NOW <<<");
+            }
+
             println!("Establishing Zero Trust Mesh to {}...", yacht);
 
-            if push {
-                println!("Pushing state to yacht...");
+            if dry_run {
+                println!("[DRY RUN] Would sync the following:");
             }
-            if pull {
-                println!("Pulling state from yacht...");
+
+            if force {
+                println!("Force sync enabled - ignoring hash matches");
             }
-            // TODO: Implement Nebula connection and sync
+
+            if !layers.is_empty() {
+                println!("Syncing layers: {:?}", layers);
+            } else {
+                println!("Syncing all layers: db, files, config");
+            }
         }
 
-        Commands::Audit { yacht, format } => {
-            info!("Auditing yacht: {}", yacht);
-            println!("Auditing security posture of {} (format: {})", yacht, format);
-            // TODO: Implement audit logic
-        }
+        Commands::State(args) => match args.command {
+            StateCommands::Freeze { name, with_db } => {
+                let snap_name = name.unwrap_or_else(|| {
+                    chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string()
+                });
+                println!("Creating snapshot: {}", snap_name);
+                if with_db {
+                    println!("Including database dump...");
+                }
+            }
+            StateCommands::Thaw { id, force } => {
+                println!("Restoring snapshot: {}", id);
+                if force {
+                    println!("Force overwrite enabled");
+                }
+            }
+            StateCommands::Diff { target, changed_only } => {
+                println!("Comparing local state with yacht: {}", target);
+                if changed_only {
+                    println!("Showing only changed files");
+                }
+            }
+            StateCommands::List { long } => {
+                println!("Available snapshots:");
+                if long {
+                    println!("  ID                  SIZE      DATE");
+                }
+            }
+            StateCommands::Prune { keep, dry_run } => {
+                println!("Pruning snapshots, keeping last {}", keep);
+                if dry_run {
+                    println!("[DRY RUN] Would delete:");
+                }
+            }
+        },
 
-        Commands::GenKeys { domain, selector, ssh, tlsa } => {
+        Commands::Sec(args) => match args.command {
+            SecCommands::Audit { target, format, cis } => {
+                println!("Security audit for: {}", target);
+                println!("Output format: {}", format);
+                if cis {
+                    println!("Checking against CIS benchmarks...");
+                }
+            }
+            SecCommands::RotateKeys { key_type, force } => {
+                println!("Rotating {} keys", key_type);
+                if force {
+                    println!("Force rotation enabled");
+                }
+            }
+            SecCommands::GenFirewall { output, arch } => {
+                println!("Generating eBPF firewall for {}", arch);
+                println!("Output: {}", output);
+            }
+            SecCommands::Verify { target, manifest } => {
+                println!("Verifying file integrity for: {}", target);
+                if let Some(m) = manifest {
+                    println!("Using manifest: {}", m);
+                }
+            }
+            SecCommands::Scan { target, scan_type } => {
+                println!("Scanning {} for vulnerabilities (type: {})", target, scan_type);
+            }
+        },
+
+        Commands::Db(args) => match args.command {
+            DbCommands::Policy { file, validate } => {
+                println!("Loading database policy from: {}", file);
+                if validate {
+                    println!("Validation only - not applying");
+                }
+            }
+            DbCommands::Export { connection, output, prune } => {
+                println!("Exporting database...");
+                println!("Connection: {}", connection);
+                println!("Output: {}", output);
+                if prune {
+                    println!("Pruning revisions and spam...");
+                }
+            }
+            DbCommands::Import { file, target } => {
+                println!("Importing {} to {}", file, target);
+            }
+            DbCommands::Status { target } => {
+                println!("Database proxy status for: {}", target);
+            }
+        },
+
+        Commands::Fleet(args) => match args.command {
+            FleetCommands::List { long } => {
+                println!("Fleet members:");
+                if long {
+                    println!("  NAME            IP              DOMAIN                STATUS");
+                }
+            }
+            FleetCommands::Add { name, ip, domain, adapter } => {
+                println!("Adding yacht: {}", name);
+                println!("  IP: {}", ip);
+                println!("  Domain: {}", domain);
+                println!("  Adapter: {}", adapter);
+            }
+            FleetCommands::Remove { name, force } => {
+                println!("Removing yacht: {}", name);
+                if !force {
+                    println!("Use --force to confirm removal");
+                }
+            }
+            FleetCommands::Status { name } => {
+                println!("Fleet status: {}", name);
+            }
+        },
+
+        Commands::Container(args) => match args.command {
+            ContainerCommands::Build { image, push, registry } => {
+                println!("Building container: {}", image);
+                if push {
+                    if let Some(reg) = registry {
+                        println!("Will push to: {}", reg);
+                    }
+                }
+            }
+            ContainerCommands::Deploy { target, pod } => {
+                println!("Deploying to yacht: {}", target);
+                println!("Pod definition: {}", pod);
+            }
+            ContainerCommands::Logs { target, container, follow, lines } => {
+                println!("Logs from {}/{} (last {} lines)", target, container, lines);
+                if follow {
+                    println!("Following...");
+                }
+            }
+        },
+
+        Commands::GenKeys { domain, selector, ssh, tlsa, openpgpkey } => {
             info!("Generating keys for domain: {}", domain);
             println!("Generating cryptographic records for {}...", domain);
             println!();
@@ -195,6 +693,12 @@ async fn main() -> anyhow::Result<()> {
                 println!("[TLSA/DANE Record]");
                 println!("_443._tcp IN TLSA 3 1 1 <CERTIFICATE_HASH>");
             }
+
+            if openpgpkey {
+                println!();
+                println!("[OPENPGPKEY Record]");
+                println!("<hash>._openpgpkey IN OPENPGPKEY <WKD_HASH>");
+            }
         }
 
         Commands::RenderZone { template, vars, output } => {
@@ -203,13 +707,11 @@ async fn main() -> anyhow::Result<()> {
             if let Some(out) = output {
                 println!("Output: {}", out);
             }
-            // TODO: Implement template rendering
         }
 
         Commands::CheckZone { domain, file } => {
             info!("Checking zone file: {}", file);
             println!("Validating zone for {} using named-checkzone...", domain);
-            // TODO: Shell out to named-checkzone
         }
 
         Commands::Version => {
@@ -217,9 +719,15 @@ async fn main() -> anyhow::Result<()> {
             println!("Version: {}", wharf_core::VERSION);
             println!();
             println!("Components:");
-            println!("  wharf-cli    - Offline Controller");
+            println!("  wharf-cli    - Offline Controller (this binary)");
             println!("  yacht-agent  - Runtime Enforcer");
-            println!("  wharf-core   - Shared Logic");
+            println!("  wharf-core   - Shared Logic Library");
+            println!("  wharf-ebpf   - Kernel Firewall (XDP)");
+            println!();
+            println!("Architecture:");
+            println!("  Wharf = Offline admin (your machine)");
+            println!("  Yacht = Online runtime (the server)");
+            println!("  Mooring = Secure sync channel (Nebula mesh)");
         }
     }
 

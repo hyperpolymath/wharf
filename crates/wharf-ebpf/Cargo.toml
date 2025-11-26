@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Jonathan D. A. Jewell <hyperpolymath>
+
+[package]
+name = "wharf-ebpf"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+license.workspace = true
+description = "eBPF XDP firewall for Project Wharf - The Sovereign Web Hypervisor"
+
+[dependencies]
+# eBPF Framework (Pure Rust)
+aya-ebpf = "0.1"
+aya-log-ebpf = "0.1"
+network-types = "0.0.6"
+
+[[bin]]
+name = "wharf-shield"
+path = "src/main.rs"

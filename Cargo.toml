@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/wharf-core",
+    "crates/wharf-ebpf",
     "bin/wharf-cli",
     "bin/yacht-agent",
 ]
@@ -53,3 +54,9 @@ notify = "6.1"
 hyper = { version = "1.0", features = ["full"] }
 axum = "0.7"
 tower = "0.4"
+
+# eBPF (Userspace Loader)
+aya = "0.12"
+
+# Date/Time
+chrono = "0.4"

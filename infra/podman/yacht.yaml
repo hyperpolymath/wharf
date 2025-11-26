@@ -1,0 +1,291 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2025 Jonathan D. A. Jewell <hyperpolymath>
+#
+# Podman Pod Definition for Project Wharf (Yacht Runtime)
+# ========================================================
+# This defines the complete runtime stack as a Kubernetes-style pod.
+# Use: podman kube play infra/podman/yacht.yaml
+#
+# Architecture:
+# - nginx: Reverse proxy / static file server (non-root, port 8080)
+# - php: PHP-FPM engine for CMS (non-root, port 9000)
+# - agent: Yacht Agent for DB proxy + security enforcement
+#
+# The eBPF firewall is loaded separately by the agent at startup.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: yacht
+  labels:
+    app: wharf
+    component: yacht
+    version: "0.1.0"
+  annotations:
+    wharf.io/security-level: "immutable"
+    wharf.io/admin-access: "nebula-only"
+spec:
+  # Containers share localhost networking
+  hostNetwork: false
+
+  # Security context for the pod
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+
+  containers:
+    # =========================================================================
+    # 1. NGINX - The Web Server
+    # =========================================================================
+    - name: nginx
+      image: localhost/yacht-nginx:latest
+      ports:
+        - containerPort: 8080
+          hostPort: 80
+          protocol: TCP
+        - containerPort: 8443
+          hostPort: 443
+          protocol: TCP
+      resources:
+        limits:
+          memory: "128Mi"
+          cpu: "500m"
+        requests:
+          memory: "64Mi"
+          cpu: "100m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      volumeMounts:
+        # Web root - READ ONLY (immutable)
+        - name: web-root
+          mountPath: /var/www/html
+          readOnly: true
+        # Temp directories - RAM disk
+        - name: nginx-tmp
+          mountPath: /tmp
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 3
+        periodSeconds: 5
+
+    # =========================================================================
+    # 2. PHP-FPM - The Engine
+    # =========================================================================
+    - name: php
+      image: localhost/yacht-php:latest
+      resources:
+        limits:
+          memory: "512Mi"
+          cpu: "1000m"
+        requests:
+          memory: "256Mi"
+          cpu: "250m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      volumeMounts:
+        # Web root - READ ONLY for most paths
+        - name: web-root
+          mountPath: /var/www/html
+          readOnly: true
+        # Uploads directory - WRITABLE (the only exception)
+        - name: uploads
+          mountPath: /var/www/html/wp-content/uploads
+          readOnly: false
+        # Cache directory - RAM disk
+        - name: php-cache
+          mountPath: /var/www/html/wp-content/cache
+        # PHP sessions - RAM disk
+        - name: php-sessions
+          mountPath: /tmp
+      env:
+        # Database connection (routed through Agent proxy)
+        - name: DB_HOST
+          value: "127.0.0.1"
+        - name: DB_PORT
+          value: "3306"
+        # Redis for sessions/cache
+        - name: REDIS_HOST
+          value: "127.0.0.1"
+        - name: REDIS_PORT
+          value: "6379"
+      livenessProbe:
+        tcpSocket:
+          port: 9000
+        initialDelaySeconds: 10
+        periodSeconds: 10
+      readinessProbe:
+        exec:
+          command: ["php-fpm83", "-t"]
+        initialDelaySeconds: 5
+        periodSeconds: 5
+
+    # =========================================================================
+    # 3. YACHT AGENT - The Shield
+    # =========================================================================
+    - name: agent
+      image: localhost/yacht-agent:latest
+      ports:
+        # DB Proxy (MySQL masquerade)
+        - containerPort: 3306
+          hostPort: 3306
+          protocol: TCP
+        # Agent API (for Wharf mooring)
+        - containerPort: 9001
+          protocol: TCP
+      resources:
+        limits:
+          memory: "128Mi"
+          cpu: "500m"
+        requests:
+          memory: "64Mi"
+          cpu: "100m"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          # NET_ADMIN required for eBPF loading
+          add:
+            - NET_ADMIN
+            - BPF
+          drop:
+            - ALL
+      volumeMounts:
+        # Agent config
+        - name: agent-config
+          mountPath: /etc/wharf
+          readOnly: true
+        # Integrity hashes
+        - name: integrity-db
+          mountPath: /var/lib/wharf
+      env:
+        # Real database location (shadow port)
+        - name: SHADOW_DB_HOST
+          value: "db"
+        - name: SHADOW_DB_PORT
+          value: "33060"
+        # Protocol detection
+        - name: DB_PROTOCOL
+          value: "mysql"
+        # Network interface for eBPF
+        - name: XDP_INTERFACE
+          value: "eth0"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 9001
+        initialDelaySeconds: 10
+        periodSeconds: 10
+
+  # ===========================================================================
+  # VOLUMES
+  # ===========================================================================
+  volumes:
+    # The website files (pushed from Wharf)
+    - name: web-root
+      hostPath:
+        path: /opt/wharf/sites/primary/html
+        type: Directory
+
+    # Uploads directory (writable by PHP)
+    - name: uploads
+      hostPath:
+        path: /opt/wharf/sites/primary/uploads
+        type: DirectoryOrCreate
+
+    # Agent configuration (from Nickel compilation)
+    - name: agent-config
+      hostPath:
+        path: /opt/wharf/config
+        type: Directory
+
+    # Integrity database (hash manifests)
+    - name: integrity-db
+      hostPath:
+        path: /opt/wharf/integrity
+        type: DirectoryOrCreate
+
+    # RAM disk mounts (tmpfs)
+    - name: nginx-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: "64Mi"
+
+    - name: php-cache
+      emptyDir:
+        medium: Memory
+        sizeLimit: "128Mi"
+
+    - name: php-sessions
+      emptyDir:
+        medium: Memory
+        sizeLimit: "64Mi"
+
+---
+# ===========================================================================
+# DATABASE POD (Separate for isolation)
+# ===========================================================================
+apiVersion: v1
+kind: Pod
+metadata:
+  name: yacht-db
+  labels:
+    app: wharf
+    component: database
+spec:
+  containers:
+    - name: mariadb
+      image: cgr.dev/chainguard/mariadb:latest
+      ports:
+        # Shadow port (not the standard 3306)
+        - containerPort: 3306
+          hostPort: 33060
+          protocol: TCP
+      resources:
+        limits:
+          memory: "1Gi"
+          cpu: "1000m"
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+      volumeMounts:
+        - name: db-data
+          mountPath: /var/lib/mysql
+      env:
+        - name: MYSQL_DATABASE
+          value: "wordpress"
+        - name: MYSQL_USER
+          value: "wordpress"
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: password
+      livenessProbe:
+        exec:
+          command: ["mysqladmin", "ping", "-h", "localhost"]
+        initialDelaySeconds: 30
+        periodSeconds: 10
+
+  volumes:
+    - name: db-data
+      hostPath:
+        path: /opt/wharf/data/mysql
+        type: DirectoryOrCreate
