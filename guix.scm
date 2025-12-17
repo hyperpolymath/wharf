@@ -1,3 +1,6 @@
+;; SPDX-License-Identifier: MIT OR AGPL-3.0-or-later
+;; SPDX-FileCopyrightText: 2025 Jonathan D. A. Jewell <hyperpolymath>
+;;
 ;; wharf - Guix Package Definition
 ;; Run: guix shell -D -f guix.scm
 
@@ -18,8 +21,8 @@
     (build-system cargo-build-system)
     (synopsis "Rust application")
     (description "Rust application - part of the RSR ecosystem.")
-    (home-page "https://github.com/hyperpolymath/wharf")
-    (license license:agpl3+)))
+    (home-page "https://gitlab.com/hyperpolymath/wharf")
+    (license (list license:expat license:agpl3+))))
 
 ;; Return package for guix shell
 wharf

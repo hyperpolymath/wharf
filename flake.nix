@@ -70,15 +70,19 @@
         };
 
         checks = {
-          format = pkgs.runCommand "check-format" {} ''
+          format = pkgs.runCommand "check-format" {
+            buildInputs = [ rustToolchain ];
+          } ''
             cd ${self}
-            ${pkgs.rustfmt}/bin/cargo fmt --check
+            cargo fmt --check
             touch $out
           '';
 
-          lint = pkgs.runCommand "check-lint" {} ''
+          lint = pkgs.runCommand "check-lint" {
+            buildInputs = [ rustToolchain ];
+          } ''
             cd ${self}
-            ${pkgs.clippy}/bin/cargo clippy -- -D warnings
+            cargo clippy -- -D warnings
             touch $out
           '';
         };
