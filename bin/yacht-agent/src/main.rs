@@ -27,7 +27,7 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -286,11 +286,15 @@ async fn handle_db_connection(
     // Connect to the real database
     let mut server = TcpStream::connect(shadow_addr).await?;
 
-    let (mut c_read, mut c_write) = client.split();
-    let (mut s_read, mut s_write) = server.split();
+    let (mut c_read, c_write) = client.into_split();
+    let (mut s_read, mut s_write) = server.into_split();
+
+    // Wrap c_write in Arc<Mutex> so both async blocks can write to client
+    let c_write = Arc::new(Mutex::new(c_write));
+    let c_write_clone = Arc::clone(&c_write);
 
     // The proxy loop
-    let client_to_server = async {
+    let client_to_server = async move {
         let mut buf = [0u8; 16384];
         loop {
             let n = c_read.read(&mut buf).await?;
@@ -338,7 +342,7 @@ async fn handle_db_connection(
                             error_packet.push(b'#'); // SQL state marker
                             error_packet.extend_from_slice(b"HY000"); // SQL state
                             error_packet.extend_from_slice(error_msg);
-                            c_write.write_all(&error_packet).await?;
+                            c_write.lock().await.write_all(&error_packet).await?;
                             return Ok(());
                         }
                     }
@@ -369,7 +373,7 @@ async fn handle_db_connection(
                             let len = (error.len() + 4) as i32;
                             packet.extend_from_slice(&len.to_be_bytes());
                             packet.extend_from_slice(error);
-                            c_write.write_all(&packet).await?;
+                            c_write.lock().await.write_all(&packet).await?;
                             return Ok(());
                         }
                     }
@@ -383,8 +387,15 @@ async fn handle_db_connection(
         }
     };
 
-    let server_to_client = async {
-        tokio::io::copy(&mut s_read, &mut c_write).await
+    let server_to_client = async move {
+        let mut buf = [0u8; 16384];
+        loop {
+            let n = s_read.read(&mut buf).await?;
+            if n == 0 {
+                return Ok::<_, std::io::Error>(());
+            }
+            c_write_clone.lock().await.write_all(&buf[0..n]).await?;
+        }
     };
 
     tokio::select! {
