@@ -4,7 +4,7 @@
 # Multi-stage Dockerfile for Project Wharf
 # Builds both wharf-cli and yacht-agent binaries
 
-FROM rust:1.83-slim-bookworm AS builder
+FROM rust:1.85-slim-bookworm AS builder
 
 WORKDIR /build
 
