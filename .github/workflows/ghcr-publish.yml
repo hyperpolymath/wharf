@@ -56,7 +56,7 @@ jobs:
 
       - name: Build image
         run: |
-          sudo nerdctl build --target ${{ matrix.target.dockerfile-target }} -t ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.target.name }}:${{ github.sha }} .
+          sudo nerdctl build -f Containerfile --target ${{ matrix.target.dockerfile-target }} -t ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.target.name }}:${{ github.sha }} .
           sudo nerdctl tag ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.target.name }}:${{ github.sha }} ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.target.name }}:latest
 
       - name: Push image
