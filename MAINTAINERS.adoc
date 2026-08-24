@@ -1,47 +1,51 @@
-// SPDX-License-Identifier: CC-BY-SA-4.0
-= Maintainers
-:toc: preamble
+== Maintainers
 
-This document lists the maintainers of this project and their responsibilities.
+This file lists the maintainers of Project Wharf and their roles.
 
-== Current Maintainers
+=== Core Maintainers
 
-[cols="2,3,2",options="header"]
+Core Maintainers have full commit access and are responsible for project
+direction.
+
+[cols=",,,",options="header",]
 |===
-| Name | Role | Contact
-
-| Jonathan D.A. Jewell
-| Lead Maintainer
-| https://github.com/hyperpolymath[@hyperpolymath]
+|Name |GitLab |Role |Since
+|Jonathan D. A. Jewell |@hyperpolymath |Founder, Lead |2025-11
 |===
 
-== Responsibilities
+=== Expert Contributors
 
-Maintainers are responsible for:
+Expert Contributors have elevated trust and review capabilities.
 
-* Reviewing and merging pull requests
-* Triaging issues and feature requests
-* Ensuring code quality and security standards
-* Managing releases and versioning
-* Upholding the project's code of conduct
+[cols=",,,",options="header",]
+|===
+|Name |GitLab |Expertise |Since
+|_Open positions_ |- |- |-
+|===
 
-== Becoming a Maintainer
+=== Emeritus Maintainers
 
-Contributors who demonstrate:
+Former maintainers who have stepped down but retain honorary status.
 
-* Consistent, high-quality contributions
-* Understanding of the project's goals and standards
-* Constructive participation in discussions
-* Commitment to the project's long-term health
+[cols=",,,",options="header",]
+|===
+|Name |GitLab |Tenure |Contributions
+|_None yet_ |- |- |-
+|===
 
-May be invited to become maintainers at the discretion of existing maintainers.
+=== Becoming a Maintainer
 
-== Decision Making
+See CONTRIBUTING.adoc for the Tri-Perimeter Contribution Framework.
 
-* Routine decisions (bug fixes, minor improvements) can be made by any maintainer
-* Significant changes require discussion and consensus among maintainers
-* Breaking changes or major features should be discussed in issues before implementation
+See GOVERNANCE.adoc for the maintainer selection process.
 
-== Contact
+=== Contact
 
-For questions about project governance, open an issue or contact the maintainers listed above.
+* *General questions*: Open a GitLab Discussion
+* *Private matters*: maintainers@hyperpolymath.net
+
+=== Attribution
+
+All maintainers and significant contributors are also listed in: -
+`+.well-known/humans.txt+` - Git commit history (signed commits) - SPDX
+headers in source files
