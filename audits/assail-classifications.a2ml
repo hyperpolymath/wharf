@@ -1,0 +1,21 @@
+%A2ML
+- suppression:
+    file: 'crates/wharf-core/src/config.rs'
+    rule: 'UnboundedAllocation'
+    justification: 'Reads local trusted configuration files; size is bounded by administrative privileges.'
+- suppression:
+    file: 'crates/wharf-core/src/integrity.rs'
+    rule: 'UnboundedAllocation'
+    justification: 'Reads local trusted configuration files; size is bounded by administrative privileges.'
+- suppression:
+    file: 'crates/wharf-core/src/nebula.rs'
+    rule: 'UnboundedAllocation'
+    justification: 'Reads local trusted configuration files; size is bounded by administrative privileges.'
+- suppression:
+    file: 'crates/wharf-core/src/fleet.rs'
+    rule: 'UnboundedAllocation'
+    justification: 'Reads local trusted configuration files; size is bounded by administrative privileges.'
+- suppression:
+    file: 'bin/yacht-agent/src/ebpf.rs'
+    rule: 'UnboundedAllocation'
+    justification: 'Reads local trusted configuration files; size is bounded by administrative privileges.'
